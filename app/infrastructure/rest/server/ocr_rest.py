@@ -19,6 +19,7 @@ app = FastAPI(title="Gemini API Proxy", description="Backend para interactuar co
 
 ALLOWED_ORIGINS = [
     "pagamipana://app",
+    "http://localhost:19006",
 ]
 
 ALLOWED_ORIGINS = list(filter(None, ALLOWED_ORIGINS))
