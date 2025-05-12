@@ -7,6 +7,9 @@ from app.infrastructure.dto.OcrRequestDTO import OcrRequestDTO
 from app.infrastructure.dto.mappers.OcrRequestDtoMapper import OcrRequestDtoMapper
 from app.infrastructure.rest.clients.GeminiClient import GeminiClient
 from app.domain.models.Exceptions.ApiKeyNotFoundException import ApiKeyNotFoundException
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -14,13 +17,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Gemini API Proxy", description="Backend para interactuar con la API de Gemini")
 
+ALLOWED_ORIGINS = [
+    "pagamipana://app",
+]
+
+ALLOWED_ORIGINS = list(filter(None, ALLOWED_ORIGINS))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 @app.get("/")
