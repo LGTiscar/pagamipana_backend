@@ -17,7 +17,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 logger = logging.getLogger(__name__)
 
 class GeminiClient(OcrClient):
-    def __init__(self, model: str = 'gemini-2.0-flash'):
+    def __init__(self, model: str = 'gemini-2.0-flash-lite'):
         self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         self.model = model
         logger.info(f"GeminiClient inicializado con modelo: {model}")
