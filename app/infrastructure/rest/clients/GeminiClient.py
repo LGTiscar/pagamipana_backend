@@ -19,7 +19,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 logger = logging.getLogger(__name__)
 
 class GeminiClient(OcrClient):
-    def __init__(self, model_name: str = 'gemini-2.0-flash'): 
+    def __init__(self, model_name: str = 'gemini-2.0-flash-lite'): 
         if not GEMINI_API_KEY:
             logger.critical("API key de Gemini no encontrada en variables de entorno.")
             raise ApiKeyNotFoundException("API key de Gemini no encontrada en variables de entorno")
