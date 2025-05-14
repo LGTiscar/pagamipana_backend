@@ -101,7 +101,7 @@ async def generate_content_file(file: UploadFile = File(...)) -> dict:
             error_traceback = traceback.format_exc()
             logger.error(f"Error al procesar archivo: {str(e)}")
             logger.error(f"Traceback completo: {error_traceback}")
-            raise HTTPException(status_code=500, detail=f"Error al procesar la imagen: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al procesar la imagen: {e}")
     
     except Exception as e:
         error_traceback = traceback.format_exc()
