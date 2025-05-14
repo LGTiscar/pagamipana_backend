@@ -3,8 +3,8 @@ from app.domain.interfaces.OcrClient import OcrClient
 
 class OcrService:
 
-    def __init__(self, ocr_service: OcrClient):
-        self.ocr_service = ocr_service
+    def __init__(self, ocr_client: OcrClient):
+        self.ocr_client = ocr_client
 
-    def get_analysis(self, image: str) -> dict:
-        return self.ocr_service.get_analysis(image)
+    def get_analysis(self, image_bytes: bytes, image_mime_type: str) -> dict:
+        return self.ocr_client.get_analysis(image_bytes=image_bytes, image_mime_type=image_mime_type)
