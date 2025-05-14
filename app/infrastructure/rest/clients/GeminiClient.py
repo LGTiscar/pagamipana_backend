@@ -19,7 +19,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 logger = logging.getLogger(__name__)
 
 class GeminiClient(OcrClient):
-    def __init__(self, model_name: str = 'gemini-2.0-flash-lite'): 
+    def __init__(self, model_name: str = 'gemini-2.0-flash'): 
         if not GEMINI_API_KEY:
             logger.critical("API key de Gemini no encontrada en variables de entorno.")
             raise ApiKeyNotFoundException("API key de Gemini no encontrada en variables de entorno")
@@ -35,6 +35,7 @@ class GeminiClient(OcrClient):
 
     def get_analysis(self, image_bytes: bytes, image_mime_type: str) -> dict:
         logger.info(f"Iniciando análisis con Gemini, modelo {self.model_name_for_library}")
+        logger.info(f"Tipo de imagen: {image_mime_type}")
 
         prompt_text = OcrTicketInput().build().system_prompt
 
@@ -57,7 +58,7 @@ class GeminiClient(OcrClient):
             # Prepare config dictionary for mime_type and display_name
             upload_config = {
                 "mime_type": image_mime_type,
-                "display_name": "ticket-{time.time()}",
+                "display_name": f"ticket-{time.time()}",
             }
 
             uploaded_file_resource = self.client.files.upload(
@@ -65,22 +66,29 @@ class GeminiClient(OcrClient):
                 config=upload_config
             )
             
-            # The returned object is of type types.File, which should have a .name attribute (e.g., "files/xxxxxxxx")
-            # and a .uri attribute (e.g., "https://generativelanguage.googleapis.com/v1beta/files/xxxxxxxx")
             uploaded_file_name = getattr(uploaded_file_resource, 'name', None)
             if not uploaded_file_name:
                 logger.warning("No se pudo obtener 'name' del recurso de archivo subido. Intentando 'uri'.")
                 uploaded_file_name = getattr(uploaded_file_resource, 'uri', None)
          
             logger.info(f"URI del archivo subido: {uploaded_file_resource.uri}")
-            content_parts = [
-                prompt_text,
-                uploaded_file_resource.uri,
-            ]
+            
+            # Explicitly construct a single Content object containing all parts
+            # for the current turn.
+            current_turn_content = types.Content(
+                parts=[
+                    types.Part.from_text(text=prompt_text),
+                    types.Part.from_uri(
+                        file_uri=uploaded_file_resource.uri, 
+                        mime_type=image_mime_type
+                    )
+                ],
+                role="user"  # Specify the role for the content
+            )
 
             response = self.client.models.generate_content(
                 model=self.model_name_for_library,
-                contents=content_parts,
+                contents=[current_turn_content],  # Pass a list containing the single Content object
             )
 
             logger.info(f"Resultado de la solicitud de análisis de Gemini (genai.Client): {response}")
