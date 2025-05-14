@@ -1,11 +1,14 @@
 from dotenv import load_dotenv
 from app.domain.interfaces.OcrClient import OcrClient
 import os
-import requests
 import logging
 import traceback
 import json
 import time
+import io
+from google import genai
+from google.genai import types
+from google.api_core import exceptions as google_exceptions
 
 from app.domain.models.Exceptions.ApiKeyNotFoundException import ApiKeyNotFoundException
 from app.infrastructure.llm.OcrTicketInput import OcrTicketInput
@@ -13,118 +16,121 @@ from app.infrastructure.llm.OcrTicketInput import OcrTicketInput
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configurar logger
 logger = logging.getLogger(__name__)
 
 class GeminiClient(OcrClient):
-    def __init__(self, model: str = 'gemini-2.0-flash-lite'):
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        self.model = model
-        logger.info(f"GeminiClient inicializado con modelo: {model}")
-
-    def get_analysis(self, image: str) -> dict:
-        logger.info(f"Iniciando análisis con Gemini, modelo {self.model}")
-        
+    def __init__(self, model_name: str = 'gemini-2.0-flash-lite'): 
         if not GEMINI_API_KEY:
-            logger.critical("API key de Gemini no encontrada")
+            logger.critical("API key de Gemini no encontrada en variables de entorno.")
             raise ApiKeyNotFoundException("API key de Gemini no encontrada en variables de entorno")
 
-        # Verificar longitud de la API key
-        if len(GEMINI_API_KEY) < 10:
-            logger.warning(f"La API key parece ser demasiado corta: {len(GEMINI_API_KEY)} caracteres")
-        else:
-            logger.info(f"API key válida encontrada ({len(GEMINI_API_KEY)} caracteres)")
+        try:
+            self.client = genai.Client(api_key=GEMINI_API_KEY)
+            logger.info("Gemini Client inicializado.")
+        except Exception as e:
+            logger.critical(f"Error configurando o inicializando el cliente de Gemini: {e}")
+            raise Exception(f"Error al inicializar el cliente de Gemini: {str(e)}")
 
-        headers = {
-            "Content-Type": "application/json",
-            'x-goog-api-key': GEMINI_API_KEY
-        }
-        
-        # Crear prompt
-        prompt = OcrTicketInput().build().system_prompt
-        logger.info(f"Prompt generado: {prompt[:100]}...")
-        
-        # Verificar tamaño de la imagen
-        image_size = len(image)
-        logger.info(f"Tamaño de la imagen a enviar: {image_size} caracteres")
-        
-        # Verificar si la imagen es demasiado grande
-        if image_size > 10485760:  # 10MB aprox
-            logger.warning(f"La imagen es muy grande ({image_size} bytes), puede causar problemas")
-            
-        # Construir payload
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": prompt,
-                        },
-                        {
-                            "inline_data": {
-                                "mime_type": 'image/jpeg',
-                                "data": image,
-                            },
-                        },
-                    ],
-                },
-            ],
-            "generation_config": {
-                "temperature": 0.2,
-                "max_output_tokens": 4000,
-            },
-        }
+        self.model_name_for_library = model_name
+
+    def get_analysis(self, image_bytes: bytes, image_mime_type: str) -> dict:
+        logger.info(f"Iniciando análisis con Gemini, modelo {self.model_name_for_library}")
+
+        prompt_text = OcrTicketInput().build().system_prompt
+
+        image_size_bytes = len(image_bytes)
+        logger.info(f"Tamaño de la imagen a enviar: {image_size_bytes} bytes")
+
+        if image_size_bytes > 20 * 1024 * 1024: # 20MB
+            logger.warning(f"La imagen ({image_size_bytes} bytes) supera los 20MB, puede ser rechazada.")
+
+
+        uploaded_file_resource = None
+        json_response_text = ""
 
         try:
-            logger.info(f"Enviando solicitud a la API de Gemini: {self.url}")
-            start_time = time.time()
+            logger.info("Subiendo imagen...")
             
-            # Realizar la petición a Gemini
-            response = requests.post(self.url, headers=headers, json=payload)
+            # Wrap image_bytes in io.BytesIO as per library requirements
+            image_file_stream = io.BytesIO(image_bytes)
+
+            # Prepare config dictionary for mime_type and display_name
+            upload_config = {
+                "mime_type": image_mime_type,
+                "display_name": "ticket-{time.time()}",
+            }
+
+            uploaded_file_resource = self.client.files.upload(
+                file=image_file_stream, 
+                config=upload_config
+            )
             
-            # Medir tiempo de respuesta
-            elapsed_time = time.time() - start_time
-            logger.info(f"Respuesta recibida en {elapsed_time:.2f} segundos, código de estado: {response.status_code}")
+            # The returned object is of type types.File, which should have a .name attribute (e.g., "files/xxxxxxxx")
+            # and a .uri attribute (e.g., "https://generativelanguage.googleapis.com/v1beta/files/xxxxxxxx")
+            uploaded_file_name = getattr(uploaded_file_resource, 'name', None)
+            if not uploaded_file_name:
+                logger.warning("No se pudo obtener 'name' del recurso de archivo subido. Intentando 'uri'.")
+                uploaded_file_name = getattr(uploaded_file_resource, 'uri', None)
+         
+            logger.info(f"URI del archivo subido: {uploaded_file_resource.uri}")
+            content_parts = [
+                prompt_text,
+                uploaded_file_resource.uri,
+            ]
+
+            response = self.client.models.generate_content(
+                model=self.model_name_for_library,
+                contents=content_parts,
+            )
+
+            logger.info(f"Resultado de la solicitud de análisis de Gemini (genai.Client): {response}")
+
+            try:
+                if response.candidates and \
+                   response.candidates[0].content and \
+                   response.candidates[0].content.parts and \
+                   response.candidates[0].content.parts[0].text:
+                    json_response_text = response.candidates[0].content.parts[0].text
+                    if json_response_text.startswith("```json"):
+                        json_response_text = json_response_text[7:]
+                    if json_response_text.endswith("```"):
+                        json_response_text = json_response_text[:-3]
+                    json_response_text = json_response_text.strip()
+                else:
+                    logger.error("Respuesta de Gemini no contiene la estructura esperada para el texto. Respuesta: %s", response)
+                    raise Exception("Respuesta de Gemini inválida: no contiene datos de texto en la estructura esperada.")
+            except AttributeError as e:
+                logger.error(f"Error accediendo a partes de la respuesta de Gemini: {e}. Respuesta: {response}")
+                raise Exception(f"Respuesta de Gemini inválida o estructura inesperada: {e}")
+
+            logger.info("Respuesta de texto JSON de Gemini (genai.Client) recibida.")
             
-            # Verificar si la respuesta es exitosa
-            if response.status_code == 200:
-                logger.info("Respuesta exitosa de la API de Gemini")
-                return response.json()
-            
-            # Manejar errores específicos
-            elif response.status_code == 400:
-                error_detail = response.json()
-                logger.error(f"Error 400 de Gemini API: {json.dumps(error_detail)}")
-                raise Exception(f"Error de solicitud: {error_detail.get('error', {}).get('message', 'Desconocido')}")
-            
-            elif response.status_code == 401 or response.status_code == 403:
-                logger.critical(f"Error de autenticación ({response.status_code}): API key inválida o no autorizada")
-                raise Exception("API key inválida o no autorizada")
-                
-            elif response.status_code == 413:
-                logger.error(f"Error 413: Entidad demasiado grande. Tamaño de la imagen: {image_size} caracteres")
-                raise Exception("La imagen es demasiado grande para ser procesada por la API")
-                
-            else:
-                # Para cualquier otro error
-                try:
-                    error_detail = response.json()
-                    logger.error(f"Error {response.status_code} de Gemini API: {json.dumps(error_detail)}")
-                except:
-                    logger.error(f"Error {response.status_code} de Gemini API, respuesta no es JSON: {response.text[:200]}")
-                
-                raise Exception(f"Error en la API de Gemini: {response.status_code}")
-                
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Error de conexión: {str(e)}")
-            raise Exception(f"Error de conexión con la API de Gemini: {str(e)}")
-        except requests.exceptions.Timeout as e:
-            logger.error(f"Timeout en la conexión: {str(e)}")
-            raise Exception(f"Timeout en la conexión con la API de Gemini: {str(e)}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error en la petición HTTP: {str(e)}")
-            raise Exception(f"Error en la petición a la API de Gemini: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error inesperado: {str(e)}")
+            analysis_result = json.loads(json_response_text)
+            logger.info("Análisis de Gemini (genai.Client) procesado exitosamente.")
+            return analysis_result
+
+        except google_exceptions.InvalidArgument as e:
+            logger.error(f"Error de solicitud inválida (400) con Gemini API (genai.Client): {e.message if hasattr(e, 'message') else e}")
+            raise Exception(f"Error de solicitud inválida a Gemini: {e.message if hasattr(e, 'message') else e}")
+        except google_exceptions.PermissionDenied as e:
+            logger.critical(f"Error de autenticación/permiso (401/403) con Gemini API (genai.Client): {e.message if hasattr(e, 'message') else e}")
+            raise ApiKeyNotFoundException(f"API key inválida o no autorizada para Gemini: {e.message if hasattr(e, 'message') else e}")
+        except google_exceptions.ResourceExhausted as e:
+            logger.error(f"Recurso agotado con Gemini API (genai.Client): {e.message if hasattr(e, 'message') else e}")
+            raise Exception(f"Límite de API de Gemini alcanzado o el archivo es demasiado grande: {e.message if hasattr(e, 'message') else e}")
+        except google_exceptions.DeadlineExceeded as e:
+            logger.error(f"Timeout en la conexión con Gemini API (genai.Client): {e.message if hasattr(e, 'message') else e}")
+            raise Exception(f"Timeout en la conexión con la API de Gemini: {e.message if hasattr(e, 'message') else e}")
+        except google_exceptions.FailedPrecondition as e:
+            logger.error(f"Error de precondición fallida con Gemini API (genai.Client): {e.message if hasattr(e, 'message') else e}")
+            raise Exception(f"Problema con el archivo procesado por Gemini: {e.message if hasattr(e, 'message') else e}")
+        except google_exceptions.GoogleAPIError as e: # Catch-all for other Google API errors
+            logger.error(f"Error genérico en la API de Gemini (genai.Client): Código {e.code if hasattr(e, 'code') else 'N/A'} - {e.message if hasattr(e, 'message') else e}")
+            raise Exception(f"Error en la API de Gemini (genai.Client): {e.message if hasattr(e, 'message') else e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decodificando JSON de la respuesta de Gemini: {e}. Respuesta parcial: {json_response_text[:200]}...")
+            raise Exception(f"Error procesando la respuesta de Gemini (JSON inválido): {e}")
+        except Exception as e: # Catch other unexpected errors, including potential AttributeError if client methods are different
+            logger.error(f"Error inesperado durante el análisis con Gemini (genai.Client): {str(e)}")
             logger.error(traceback.format_exc())
-            raise Exception(f"Error inesperado al procesar la solicitud: {str(e)}")
+            raise Exception(f"Error inesperado al procesar la solicitud con Gemini: {str(e)}")

@@ -49,13 +49,11 @@ def read_root():
     logger.info("Endpoint raíz llamado")
     return {"message": "Gemini API Proxy Service"}
 
-# todo logs a mi manera
 @app.post("/api/ocr/generate")
 async def generate_content_file(file: UploadFile = File(...)) -> dict:
     try:
         logger.info(f"Recibida solicitud de análisis OCR (método archivo): {file.filename}")
         
-        # Leer y procesar la imagen
         try:
             image_contents = await file.read()
             logger.info(f"Archivo leído correctamente, tamaño: {len(image_contents)} bytes")
@@ -69,12 +67,9 @@ async def generate_content_file(file: UploadFile = File(...)) -> dict:
             
             output_buffer = BytesIO()
             img.save(output_buffer, format="JPEG", quality=70)
-            compressed_image = output_buffer.getvalue()
-            logger.info(f"Imagen comprimida correctamente, nuevo tamaño: {len(compressed_image)} bytes")
+            compressed_image_bytes = output_buffer.getvalue()
+            logger.info(f"Imagen comprimida correctamente, nuevo tamaño: {len(compressed_image_bytes)} bytes")
         
-            base64_image = base64.b64encode(compressed_image).decode('utf-8')
-            logger.info(f"Imagen convertida a base64, tamaño: {len(base64_image)} caracteres")
-            
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
                 logger.critical("API key de Gemini no encontrada en variables de entorno")
@@ -85,7 +80,11 @@ async def generate_content_file(file: UploadFile = File(...)) -> dict:
             gemini_client = GeminiClient()
             logger.info("Cliente Gemini inicializado correctamente")
             
-            result = GetOcrAnalysisUseCase(gemini_client).execute(base64_image)
+            image_mime_type = "image/jpeg"
+            result = GetOcrAnalysisUseCase(gemini_client).execute(
+                image_bytes=compressed_image_bytes, 
+                image_mime_type=image_mime_type
+            )
             logger.info("Caso de uso ejecutado correctamente")
             
             response = result.to_dict()
