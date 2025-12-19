@@ -1,0 +1,63 @@
+name: Deploy to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: pagamipana-ocr-lambda-python
+  LAMBDA_FUNCTION: pagamipana-ocr-python
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker buildx build --platform linux/amd64 \
+          --provenance=false \
+          --sbom=false \
+          -f Dockerfile.lambda.python \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --push .
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Update Lambda function
+      run: |
+        aws lambda update-function-code \
+          --function-name ${{ env.LAMBDA_FUNCTION }} \
+          --image-uri ${{ steps.build-image.outputs.image }} \
+          --region ${{ env.AWS_REGION }}
+        
+        # Wait for update to complete
+        aws lambda wait function-updated \
+          --function-name ${{ env.LAMBDA_FUNCTION }} \
+          --region ${{ env.AWS_REGION }}
+
+    - name: Deployment complete
+      run: |
+        echo "✅ Lambda function ${{ env.LAMBDA_FUNCTION }} updated successfully"
+        echo "🐳 Image: ${{ steps.build-image.outputs.image }}"
