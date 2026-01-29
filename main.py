@@ -86,7 +86,7 @@ async def process_image(image_bytes: bytes) -> OcrResult:
     """Procesa la imagen con Gemini Vision"""
     try:
         # Configurar el modelo
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         # Prompt para extracción estructurada
         prompt = """
