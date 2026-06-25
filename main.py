@@ -125,14 +125,10 @@ async def process_image(image_bytes: bytes) -> OcrResult:
         image_bytes = optimize_image(image_bytes)
 
         # Configurar el modelo
-<<<<<<< Updated upstream
-        model = genai.GenerativeModel('gemini-3.1-flash-lite')
-=======
         model = genai.GenerativeModel(
-            'gemini-2.5-flash-lite',
+            'gemini-3.1-flash-lite',
             generation_config=GENERATION_CONFIG,
         )
->>>>>>> Stashed changes
 
         # Prompt para extracción estructurada
         prompt = """
