@@ -1,4 +1,4 @@
-aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 561903439674.dkr.ecr.eu-north-1.amazonaws.comjkj#!/bin/bash
+#!/bin/bash
 set -e
 
 IMAGE_NAME="pagamipana-ocr-lambda-python"

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import google.generativeai as genai
+from PIL import Image
 from mangum import Mangum
 
 app = FastAPI(title="PagaMiPana OCR Backend")
@@ -82,11 +83,56 @@ async def ocr_from_base64(request: ImageRequest):
     return await process_image(image_bytes)
 
 
+# Optimización de imagen (A1): los tickets son largos y estrechos;
+# 1568px de lado largo conserva la legibilidad del texto pequeño.
+MAX_IMAGE_DIMENSION = 1568
+JPEG_QUALITY = 80
+
+
+def optimize_image(image_bytes: bytes) -> bytes:
+    """Redimensiona y recomprime la imagen para reducir los tiles que procesa Gemini."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image: {str(e)}")
+
+    # JPEG no soporta alpha ni modos no-RGB
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Redimensionar in-place manteniendo aspecto solo si excede el máximo
+    img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+# Config de generación (A2): JSON directo evita limpiar fences markdown y
+# reduce fallos de parseo; temperature 0 y tope de tokens recortan latencia.
+GENERATION_CONFIG = {
+    "response_mime_type": "application/json",
+    "temperature": 0,
+    "max_output_tokens": 2048,
+}
+
+
 async def process_image(image_bytes: bytes) -> OcrResult:
     """Procesa la imagen con Gemini Vision"""
     try:
+        # A1: reducir tamaño/peso antes de enviar a Gemini
+        image_bytes = optimize_image(image_bytes)
+
         # Configurar el modelo
+<<<<<<< Updated upstream
         model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+=======
+        model = genai.GenerativeModel(
+            'gemini-2.5-flash-lite',
+            generation_config=GENERATION_CONFIG,
+        )
+>>>>>>> Stashed changes
         
         # Prompt para extracción estructurada
         prompt = """
@@ -147,27 +193,24 @@ Now process the receipt image and return ONLY the JSON result, no other text.
         # Extraer texto
         result_text = response.text.strip()
         
-        # Intentar parsear como JSON
+        # A2: con response_mime_type=application/json Gemini devuelve JSON
+        # directo, sin fences markdown que limpiar.
         import json
         try:
-            # Limpiar markdown code blocks si existen
-            if result_text.startswith("```"):
-                result_text = result_text.split("```")[1]
-                if result_text.startswith("json"):
-                    result_text = result_text[4:]
-                result_text = result_text.strip()
-            
             structured_data = json.loads(result_text)
         except json.JSONDecodeError:
             # Si no es JSON válido, devolver como texto plano
             structured_data = None
-        
+
         return OcrResult(
             success=True,
             text=result_text,
             structured_data=structured_data
         )
-        
+
+    except HTTPException:
+        # Errores de validación (p. ej. imagen inválida) deben propagarse tal cual
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR processing error: {str(e)}")
 
