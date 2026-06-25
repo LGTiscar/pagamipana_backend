@@ -56,10 +56,10 @@ async def ocr_from_file(file: UploadFile = File(...)):
     """OCR endpoint que acepta multipart/form-data (para desarrollo local)"""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-    
+
     # Leer imagen
     image_bytes = await file.read()
-    
+
     return await process_image(image_bytes)
 
 
@@ -68,18 +68,18 @@ async def ocr_from_base64(request: ImageRequest):
     """OCR endpoint que acepta JSON con base64 (para Lambda/producción)"""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-    
+
     # Decodificar base64
     try:
         # Remover prefijo data:image si existe
         base64_str = request.image
         if "base64," in base64_str:
             base64_str = base64_str.split("base64,")[1]
-        
+
         image_bytes = base64.b64decode(base64_str)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid base64 image: {str(e)}")
-    
+
     return await process_image(image_bytes)
 
 
@@ -126,14 +126,14 @@ async def process_image(image_bytes: bytes) -> OcrResult:
 
         # Configurar el modelo
 <<<<<<< Updated upstream
-        model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
+        model = genai.GenerativeModel('gemini-3.1-flash-lite')
 =======
         model = genai.GenerativeModel(
             'gemini-2.5-flash-lite',
             generation_config=GENERATION_CONFIG,
         )
 >>>>>>> Stashed changes
-        
+
         # Prompt para extracción estructurada
         prompt = """
 You are an OCR and information extraction model specialized in retail and restaurant receipts.
@@ -180,19 +180,19 @@ Return a single JSON object with this structure:
 
 Now process the receipt image and return ONLY the JSON result, no other text.
 """
-        
+
         # Preparar la imagen
         image_data = {
             'mime_type': 'image/jpeg',  # Gemini auto-detecta el tipo real
             'data': image_bytes
         }
-        
+
         # Generar contenido
         response = model.generate_content([prompt, image_data])
-        
+
         # Extraer texto
         result_text = response.text.strip()
-        
+
         # A2: con response_mime_type=application/json Gemini devuelve JSON
         # directo, sin fences markdown que limpiar.
         import json
