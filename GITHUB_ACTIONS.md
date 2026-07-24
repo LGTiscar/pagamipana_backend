@@ -1,6 +1,6 @@
 # GitHub Actions Setup
 
-Este repositorio usa GitHub Actions para desplegar automáticamente a AWS Lambda cuando se hace push a `main`.
+Este repositorio usa GitHub Actions para desplegar automáticamente a AWS Lambda cuando se hace push a `master` o `main`.
 
 ## Configuración de Secrets
 
@@ -54,7 +54,7 @@ El usuario IAM debe tener una política con estos permisos:
 ## Workflow
 
 El workflow se ejecuta automáticamente cuando:
-- Se hace `push` a la rama `main`
+- Se hace `push` a la rama `master` o `main`
 
 Pasos del workflow:
 1. ✅ Checkout del código

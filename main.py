@@ -2,13 +2,15 @@ import os
 import io
 import base64
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import google.generativeai as genai
 from PIL import Image
 from mangum import Mangum
+import jwt
+from jwt import PyJWKClient
 
 app = FastAPI(title="PagaMiPana OCR Backend")
 
@@ -26,6 +28,39 @@ app.add_middleware(
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
+
+# ---------------------------------------------------------------------------
+# Autenticación: exigir un JWT válido de Supabase en las peticiones de OCR.
+# El frontend envía `Authorization: Bearer <access_token>`. Esto evita que el
+# endpoint sea abierto (abuso de coste / OCR gratis).
+#   - HS256: verifica con SUPABASE_JWT_SECRET (secreto JWT clásico).
+#   - ES256/RS256: verifica contra el JWKS del proyecto (claves asimétricas).
+# ---------------------------------------------------------------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+_jwks_client = PyJWKClient(f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json") if SUPABASE_URL else None
+
+
+async def require_user(request: Request) -> dict:
+    auth = request.headers.get("authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Falta el token de autenticación")
+    token = auth.split(" ", 1)[1].strip()
+    try:
+        alg = jwt.get_unverified_header(token).get("alg")
+        if alg == "HS256":
+            if not SUPABASE_JWT_SECRET:
+                raise HTTPException(status_code=500, detail="SUPABASE_JWT_SECRET no configurado")
+            return jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        if _jwks_client is None:
+            raise HTTPException(status_code=500, detail="SUPABASE_URL no configurado")
+        key = _jwks_client.get_signing_key_from_jwt(token).key
+        return jwt.decode(token, key, algorithms=[alg], audience="authenticated")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token inválido: {str(e)}")
 
 
 class ImageRequest(BaseModel):
@@ -52,7 +87,7 @@ async def health():
 
 
 @app.post("/api/ocr", response_model=OcrResult)
-async def ocr_from_file(file: UploadFile = File(...)):
+async def ocr_from_file(file: UploadFile = File(...), user: dict = Depends(require_user)):
     """OCR endpoint que acepta multipart/form-data (para desarrollo local)"""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
@@ -64,7 +99,7 @@ async def ocr_from_file(file: UploadFile = File(...)):
 
 
 @app.post("/api/ocr/base64", response_model=OcrResult)
-async def ocr_from_base64(request: ImageRequest):
+async def ocr_from_base64(request: ImageRequest, user: dict = Depends(require_user)):
     """OCR endpoint que acepta JSON con base64 (para Lambda/producción)"""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
